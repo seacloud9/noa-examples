@@ -130,5 +130,5 @@ function resetGame() {
 noa.camera.zoomDistance = 10; // Set the distance behind the player
 noa.rendering.getScene().activeCamera.lockedTarget = playerMesh;
 
-// Generate initial world
-noa.world.manuallyLoadChunk(0, 0, 0);ddddweẽ
+/ / Generate initial world
+noa.world.manuallyLoadChunk(0, 0, 0);
