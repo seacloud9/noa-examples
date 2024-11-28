@@ -1,164 +1,134 @@
+import { Engine } from 'noa-engine';
+import { CreateBox } from '@babylonjs/core/Meshes/Builders/boxBuilder';
+import { Color3 } from '@babylonjs/core/Maths/math.color';
 
-
-/* 
- * 
- *          noa hello-world example
- * 
- *  This is a bare-minimum example world, intended to be a 
- *  starting point for hacking on noa game world content.
- * 
-*/
-
-
-
-// Engine options object, and engine instantiation.
-import { Engine } from 'noa-engine'
-
-
+// Engine configuration
 var opts = {
     debug: true,
     showFPS: true,
     chunkSize: 32,
-    chunkAddDistance: 2.5,
+    chunkAddDistance: 3.5,
     chunkRemoveDistance: 3.5,
-    // See `test` example, or noa docs/source, for more options
-}
-var noa = new Engine(opts)
+    gravity: [0, -10, 0],
+};
+var noa = new Engine(opts);
 
+// Materials
+var pathColor = [0.5, 0.5, 0.5];
+var obstacleColor = [1, 0, 0];
+noa.registry.registerMaterial('path', { color: pathColor });
+noa.registry.registerMaterial('obstacle', { color: obstacleColor });
 
+// Block types
+var pathID = noa.registry.registerBlock(1, { material: 'path' });
+var obstacleID = noa.registry.registerBlock(2, { material: 'obstacle' });
 
-/*
- *
- *      Registering voxel types
- * 
- *  Two step process. First you register a material, specifying the 
- *  color/texture/etc. of a given block face, then you register a 
- *  block, which specifies the materials for a given block type.
- * 
-*/
-
-// block materials (just colors for this demo)
-var brownish = [0.45, 0.36, 0.22]
-var greenish = [0.1, 0.8, 0.2]
-noa.registry.registerMaterial('dirt', { color: brownish })
-noa.registry.registerMaterial('grass', { color: greenish })
-
-
-// block types and their material names
-var dirtID = noa.registry.registerBlock(1, { material: 'dirt' })
-var grassID = noa.registry.registerBlock(2, { material: 'grass' })
-
-
-
-
-/*
- * 
- *      World generation
- * 
- *  The world is divided into chunks, and `noa` will emit an 
- *  `worldDataNeeded` event for each chunk of data it needs.
- *  The game client should catch this, and call 
- *  `noa.world.setChunkData` whenever the world data is ready.
- *  (The latter can be done asynchronously.)
- * 
-*/
-
-// simple height map worldgen function
-function getVoxelID(x, y, z) {
-    if (y < -3) return dirtID
-    var height = 2 * Math.sin(x / 10) + 3 * Math.cos(z / 20)
-    if (y < height) return grassID
-    return 0 // signifying empty space
+// World Generation
+function getVoxelID(x, y, z, difficulty) {
+    if (y === 0 && Math.abs(x) <= 2) return pathID; // Path
+    if (y === 1 && z > 5 && Math.random() < difficulty) return obstacleID; // Obstacles
+    return 0; // Empty
 }
 
-// register for world events
 noa.world.on('worldDataNeeded', function (id, data, x, y, z) {
-    // `id` - a unique string id for the chunk
-    // `data` - an `ndarray` of voxel ID data (see: https://github.com/scijs/ndarray)
-    // `x, y, z` - world coords of the corner of the chunk
     for (var i = 0; i < data.shape[0]; i++) {
         for (var j = 0; j < data.shape[1]; j++) {
             for (var k = 0; k < data.shape[2]; k++) {
-                var voxelID = getVoxelID(x + i, y + j, z + k)
-                data.set(i, j, k, voxelID)
+                var voxelID = getVoxelID(x + i, y + j, z + k, currentDifficulty);
+                data.set(i, j, k, voxelID);
             }
         }
     }
-    // tell noa the chunk's terrain data is now set
-    noa.world.setChunkData(id, data)
-})
+    noa.world.setChunkData(id, data);
+});
 
+// Player Setup
+var player = noa.playerEntity;
+var scene = noa.rendering.getScene();
 
-
-
-/*
- * 
- *      Create a mesh to represent the player:
- * 
-*/
-
-// get the player entity's ID and other info (position, size, ..)
-var player = noa.playerEntity
-var dat = noa.entities.getPositionData(player)
-var w = dat.width
-var h = dat.height
-
-// add a mesh to represent the player, and scale it, etc.
-import { CreateBox } from '@babylonjs/core/Meshes/Builders/boxBuilder'
-
-var scene = noa.rendering.getScene()
-var mesh = CreateBox('player-mesh', {}, scene)
-mesh.scaling.x = w
-mesh.scaling.z = w
-mesh.scaling.y = h
-
-// this adds a default flat material, without specularity
-mesh.material = noa.rendering.makeStandardMaterial()
-
-
-// add "mesh" component to the player entity
-// this causes the mesh to move around in sync with the player entity
+// Create Player Mesh
+var playerMesh = CreateBox('player', {}, scene);
+playerMesh.scaling.set(1, 2, 1);
+playerMesh.material = noa.rendering.makeStandardMaterial();
+playerMesh.material.diffuseColor = new Color3(0, 0, 1);
 noa.entities.addComponent(player, noa.entities.names.mesh, {
-    mesh: mesh,
-    // offset vector is needed because noa positions are always the 
-    // bottom-center of the entity, and Babylon's CreateBox gives a 
-    // mesh registered at the center of the box
-    offset: [0, h / 2, 0],
-})
+    mesh: playerMesh,
+    offset: [0, 1, 0],
+});
 
+// Controls
+noa.inputs.bind('left', 'KeyA'); // Move left
+noa.inputs.bind('right', 'KeyD'); // Move right
 
-/*
- * 
- *      Minimal interactivity 
- * 
-*/
+// Countdown Logic
+let gameStarted = false;
+let countdown = 3; // Countdown seconds
+let speed = 5; // Initial forward speed
+let currentDifficulty = 0.05; // Initial difficulty (0-1)
 
-// clear targeted block on on left click
-noa.inputs.down.on('fire', function () {
-    if (noa.targetedBlock) {
-        var pos = noa.targetedBlock.position
-        noa.setBlock(0, pos[0], pos[1], pos[2])
-    }
-})
+function startCountdown() {
+    console.log("Get ready!");
+    const interval = setInterval(() => {
+        console.log(countdown > 0 ? countdown : "Go!");
+        countdown--;
 
-// place some grass on right click
-noa.inputs.down.on('alt-fire', function () {
-    if (noa.targetedBlock) {
-        var pos = noa.targetedBlock.adjacent
-        noa.setBlock(grassID, pos[0], pos[1], pos[2])
-    }
-})
+        if (countdown < 0) {
+            clearInterval(interval);
+            gameStarted = true;
+        }
+    }, 1000);
+}
 
-// add a key binding for "E" to do the same as alt-fire
-noa.inputs.bind('alt-fire', 'KeyE')
+startCountdown();
 
-
-// each tick, consume any scroll events and use them to zoom camera
+// Player Movement
 noa.on('tick', function (dt) {
-    var scroll = noa.inputs.pointerState.scrolly
-    if (scroll !== 0) {
-        noa.camera.zoomDistance += (scroll > 0) ? 1 : -1
-        if (noa.camera.zoomDistance < 0) noa.camera.zoomDistance = 0
-        if (noa.camera.zoomDistance > 10) noa.camera.zoomDistance = 10
+    if (!gameStarted) return;
+
+    var pos = noa.entities.getPosition(player);
+    noa.entities.setPosition(player, [pos[0], pos[1], pos[2] + speed * dt]);
+
+    // Handle lateral movement
+    if (noa.inputs.state.left) {
+        noa.entities.setPosition(player, [pos[0] - 5 * dt, pos[1], pos[2]]);
     }
-})
+    if (noa.inputs.state.right) {
+        noa.entities.setPosition(player, [pos[0] + 5 * dt, pos[1], pos[2]]);
+    }
+
+    // Collision Detection
+    var blockBelow = noa.getBlock(Math.floor(pos[0]), Math.floor(pos[1]) - 1, Math.floor(pos[2]));
+    if (blockBelow !== pathID) {
+        console.log("Game Over! You fell.");
+        resetGame();
+        return;
+    }
+
+    var blockAhead = noa.getBlock(Math.floor(pos[0]), Math.floor(pos[1]), Math.floor(pos[2] + 1));
+    if (blockAhead === obstacleID) {
+        console.log("Game Over! You hit an obstacle.");
+        resetGame();
+        return;
+    }
+
+    // Gradually increase difficulty
+    speed += 0.01 * dt; // Speed increases over time
+    currentDifficulty = Math.min(0.5, currentDifficulty + 0.00005 * dt); // More obstacles appear
+});
+
+// Reset Game
+function resetGame() {
+    gameStarted = false;
+    countdown = 3;
+    speed = 5;
+    currentDifficulty = 0.05;
+    noa.entities.setPosition(player, [0, 10, 0]); // Reset position
+    startCountdown();
+}
+
+// Camera
+noa.camera.zoomDistance = 10; // Set the distance behind the player
+noa.rendering.getScene().activeCamera.lockedTarget = playerMesh;
+
+// Generate initial world
+noa.world.manuallyLoadChunk(0, 0, 0);ddddweẽ
